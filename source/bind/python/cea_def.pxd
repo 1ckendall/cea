@@ -254,6 +254,7 @@ cdef extern from "cea.h":
         const cea_string* insert
         cea_bool smooth_truncation
         cea_real truncation_width
+        cea_bool frozen_rephase
 
     cpdef cea_err cea_solver_opts_init(cea_solver_opts *opts)
     cpdef cea_err cea_species_name_len(cea_int *name_len)

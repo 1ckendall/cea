@@ -25,6 +25,8 @@ module cea_rocket
 
         type(EqSolver) :: eq_solver
             !! Equilibrium solver
+        logical :: frozen_rephase = .false.
+            !! Allow fixed condensed formula amounts to change physical phase in frozen flow
 
     contains
 
@@ -203,6 +205,87 @@ contains
         call self%eq_solver%compute_transport_state(eq_soln)
     end subroutine
 
+    logical function frozen_species_in_range(species, T)
+        use cea_thermo, only: SpeciesThermo
+        type(SpeciesThermo), intent(in) :: species
+        real(dp), intent(in) :: T
+
+        integer :: i
+
+        frozen_species_in_range = .false.
+        do i = 1, species%num_intervals
+            if (T >= species%T_fit(i, 1) .and. T <= species%T_fit(i, 2)) then
+                frozen_species_in_range = .true.
+                return
+            end if
+        end do
+    end function
+
+    subroutine frozen_rephase_condensed(self, eq_soln, T, h_offset, s_offset, all_valid)
+        class(RocketSolver), intent(in) :: self
+        type(EqSolution), intent(inout) :: eq_soln
+        real(dp), intent(in) :: T
+        real(dp), intent(inout) :: h_offset(:), s_offset(:)
+        logical, intent(out) :: all_valid
+
+        integer :: i, j, ng, nc, best
+        real(dp) :: amount, gibbs, best_gibbs, T_transition
+        real(dp), parameter :: amount_tol = 1.0d-12
+        real(dp), parameter :: stoich_tol = 1.0d-12
+        real(dp), parameter :: phase_gap = 50.0d0
+
+        ng = self%eq_solver%num_gas
+        nc = self%eq_solver%num_condensed
+        all_valid = .true.
+
+        do i = 1, nc
+            amount = eq_soln%nj(ng+i)
+            if (abs(amount) <= amount_tol) cycle
+            if (frozen_species_in_range(self%eq_solver%products%species(ng+i), T)) cycle
+
+            best = 0
+            best_gibbs = huge(1.0d0)
+            do j = 1, nc
+                if (j == i) cycle
+                if (.not. all(abs(self%eq_solver%products%stoich_matrix(ng+i, :) - &
+                                  self%eq_solver%products%stoich_matrix(ng+j, :)) <= stoich_tol)) cycle
+                if (.not. frozen_species_in_range(self%eq_solver%products%species(ng+j), T)) cycle
+                gibbs = self%eq_solver%products%species(ng+j)%calc_gibbs_energy(T)
+                if (gibbs < best_gibbs) then
+                    best = j
+                    best_gibbs = gibbs
+                end if
+            end do
+
+            if (best == 0) then
+                if (T < minval(self%eq_solver%products%species(ng+i)%T_fit(:, 1))-phase_gap .or. &
+                    T > maxval(self%eq_solver%products%species(ng+i)%T_fit(:, 2))+phase_gap) all_valid = .false.
+                cycle
+            end if
+
+            if (T < minval(self%eq_solver%products%species(ng+i)%T_fit(:, 1))) then
+                T_transition = minval(self%eq_solver%products%species(ng+i)%T_fit(:, 1))
+            else
+                T_transition = maxval(self%eq_solver%products%species(ng+i)%T_fit(:, 2))
+            end if
+
+            call log_info("Frozen phase change: replace "//trim(self%eq_solver%products%species_names(ng+i))// &
+                          " with "//trim(self%eq_solver%products%species_names(ng+best)))
+            eq_soln%nj(ng+best) = eq_soln%nj(ng+best) + amount
+            eq_soln%nj(ng+i) = 0.0d0
+            eq_soln%is_active(i) = .false.
+            eq_soln%is_active(best) = .true.
+            h_offset(best) = h_offset(i) + &
+                self%eq_solver%products%species(ng+i)%calc_enthalpy(T_transition) - &
+                self%eq_solver%products%species(ng+best)%calc_enthalpy(T_transition)
+            s_offset(best) = s_offset(i) + &
+                self%eq_solver%products%species(ng+i)%calc_entropy(T_transition) - &
+                self%eq_solver%products%species(ng+best)%calc_entropy(T_transition)
+            h_offset(i) = 0.0d0
+            s_offset(i) = 0.0d0
+        end do
+    end subroutine
+
     logical function has_array_values(values)
         real(dp), intent(in), optional :: values(:)
 
@@ -235,7 +318,7 @@ contains
     ! RocketSolver
     !-----------------------------------------------------------------------
     function RocketSolver_init(products, reactants, trace, ions, all_transport, insert, &
-            smooth_truncation, truncation_width) result(self)
+            smooth_truncation, truncation_width, frozen_rephase) result(self)
         type(RocketSolver) :: self
         type(Mixture), intent(in) :: products
         type(Mixture), intent(in), optional :: reactants
@@ -245,12 +328,15 @@ contains
         character(*), intent(in), optional :: insert(:)  ! List of condensed species to insert
         logical, intent(in), optional :: smooth_truncation
         real(dp), intent(in), optional :: truncation_width
+        logical, intent(in), optional :: frozen_rephase
 
         call log_debug("Initializing RocketSolver")
 
         self%eq_solver = EqSolver(products, reactants, trace=trace, ions=ions, &
                                   all_transport=all_transport, insert=insert, &
                                   smooth_truncation=smooth_truncation, truncation_width=truncation_width)
+
+        if (present(frozen_rephase)) self%frozen_rephase = frozen_rephase
 
         call log_debug("RocketSolver initialized successfully")
 
@@ -277,14 +363,20 @@ contains
         real(dp), parameter :: phase_gap = 50.0d0  ! Condensed phase guard band [K]
         real(dp) :: cpsum, ssum              ! Temporary variables for mixture properties
         real(dp) :: cpj, sj                  ! Temporary variables for species properties
+        real(dp) :: condensed_amount         ! Frozen amount for the selected condensed phase
         real(dp) :: dlnt                     ! Update variable for log-temperature
         real(dp) :: T_low, T_high            ! Species temperature bounds [K]
         real(dp) :: gas_T_min                ! Minimum valid gas-fit lower bound [K]
+        real(dp), allocatable :: h_offset(:)  ! Condensed H/R calibration offsets [K]
+        real(dp), allocatable :: s_offset(:)  ! Condensed S/R calibration offsets
 
         call log_debug("Starting frozen calculations")
 
         ! Shorthand
         ng = self%eq_solver%num_gas
+        allocate(h_offset(self%eq_solver%num_condensed), s_offset(self%eq_solver%num_condensed))
+        h_offset = 0.0d0
+        s_offset = 0.0d0
 
         ! Set the equilibrium solution values
         soln%eq_soln(idx)%nj = soln%eq_soln(n_frz)%nj
@@ -304,6 +396,15 @@ contains
         convg = .false.
         finalized = .false.
         do i = 1, max_iter_frozen
+            if (self%frozen_rephase) then
+                call frozen_rephase_condensed(self, soln%eq_soln(idx), soln%eq_soln(idx)%T, &
+                                               h_offset, s_offset, in_range)
+                if (.not. in_range) then
+                    call log_warning("Frozen calculations stopped: no temperature-valid phase for a condensed species")
+                    call mark_partial_stop(soln, idx-1, rocket_warning_condensed_temp_range)
+                    return
+                end if
+            end if
             cpsum = 0.0d0
             ssum = 0.0d0
             do j = 1, self%eq_solver%num_gas
@@ -313,11 +414,17 @@ contains
                 ssum = ssum + soln%eq_soln(n_frz)%nj(j)*(sj+soln%eq_soln(idx)%dln_nj(j))
             end do
             do j = 1, self%eq_solver%num_condensed
-                if (.not. soln%eq_soln(n_frz)%is_active(j)) cycle
+                if (self%frozen_rephase) then
+                    condensed_amount = soln%eq_soln(idx)%nj(ng+j)
+                    if (abs(condensed_amount) <= approx_zero_tol) cycle
+                else
+                    if (.not. soln%eq_soln(n_frz)%is_active(j)) cycle
+                    condensed_amount = soln%eq_soln(n_frz)%nj(ng+j)
+                end if
                 cpj = self%eq_solver%products%species(ng+j)%calc_cp(soln%eq_soln(idx)%T)
-                sj = self%eq_solver%products%species(ng+j)%calc_entropy(soln%eq_soln(idx)%T)
-                cpsum = cpsum + soln%eq_soln(n_frz)%nj(ng+j)*cpj
-                ssum = ssum + soln%eq_soln(n_frz)%nj(ng+j)*sj
+                sj = self%eq_solver%products%species(ng+j)%calc_entropy(soln%eq_soln(idx)%T) + s_offset(j)
+                cpsum = cpsum + condensed_amount*cpj
+                ssum = ssum + condensed_amount*sj
             end do
 
             if (convg) then
@@ -344,16 +451,18 @@ contains
                 ! Check the thermo interval associated with the frozen
                 ! composition point, not the species' overall span.
                 in_range = .true.
-                do j = 1, self%eq_solver%num_condensed
-                    ! TODO(smooth_truncation): smooth gating means species are rarely exactly zero.
-                    ! Frozen-mode checks intentionally use a practical-zero tolerance.
-                    if (abs(soln%eq_soln(n_frz)%nj(ng+j)) <= approx_zero_tol) cycle
-                    call frozen_fit_bounds(self%eq_solver%products%species(ng+j), soln%eq_soln(n_frz)%T, T_low, T_high)
-                    if (soln%eq_soln(idx)%T < (T_low-phase_gap) .or. soln%eq_soln(idx)%T > (T_high+phase_gap)) then
-                        in_range = .false.
-                        exit
-                    end if
-                end do
+                if (.not. self%frozen_rephase) then
+                    do j = 1, self%eq_solver%num_condensed
+                        ! TODO(smooth_truncation): smooth gating means species are rarely exactly zero.
+                        ! Frozen-mode checks intentionally use a practical-zero tolerance.
+                        if (abs(soln%eq_soln(n_frz)%nj(ng+j)) <= approx_zero_tol) cycle
+                        call frozen_fit_bounds(self%eq_solver%products%species(ng+j), soln%eq_soln(n_frz)%T, T_low, T_high)
+                        if (soln%eq_soln(idx)%T < (T_low-phase_gap) .or. soln%eq_soln(idx)%T > (T_high+phase_gap)) then
+                            in_range = .false.
+                            exit
+                        end if
+                    end do
+                end if
 
                 if (.not. in_range) then
                     call log_warning("Frozen calculations stopped: temperature is more than 50 K outside "// &
@@ -393,6 +502,22 @@ contains
         soln%eq_soln(idx)%energy = soln%eq_soln(idx)%enthalpy - soln%eq_soln(idx)%n*soln%eq_soln(idx)%T*R/1.d3
         soln%eq_soln(idx)%entropy = soln%eq_soln(n_frz)%entropy
         soln%eq_soln(idx)%gibbs_energy = (soln%eq_soln(idx)%enthalpy - soln%eq_soln(idx)%T*soln%eq_soln(idx)%entropy)
+        soln%eq_soln(idx)%mole_fractions = soln%eq_soln(idx)%nj / sum(soln%eq_soln(idx)%nj)
+        soln%eq_soln(idx)%mass_fractions = soln%eq_soln(idx)%nj * &
+            self%eq_solver%products%species%molecular_weight / &
+            sum(soln%eq_soln(idx)%nj * self%eq_solver%products%species%molecular_weight)
+        do j = 1, self%eq_solver%num_condensed
+            soln%eq_soln(idx)%thermo%enthalpy(ng+j) = soln%eq_soln(idx)%thermo%enthalpy(ng+j) + &
+                                                       h_offset(j)/soln%eq_soln(idx)%T
+            soln%eq_soln(idx)%thermo%energy(ng+j) = soln%eq_soln(idx)%thermo%energy(ng+j) + &
+                                                    h_offset(j)/soln%eq_soln(idx)%T
+            soln%eq_soln(idx)%thermo%entropy(ng+j) = soln%eq_soln(idx)%thermo%entropy(ng+j) + s_offset(j)
+        end do
+        soln%eq_soln(idx)%enthalpy = dot_product(soln%eq_soln(idx)%nj, soln%eq_soln(idx)%thermo%enthalpy) * &
+                                     R*soln%eq_soln(idx)%T/1.d3
+        soln%eq_soln(idx)%energy = soln%eq_soln(idx)%enthalpy - soln%eq_soln(idx)%n*soln%eq_soln(idx)%T*R/1.d3
+        soln%eq_soln(idx)%gibbs_energy = soln%eq_soln(idx)%enthalpy - &
+                                         soln%eq_soln(idx)%T*soln%eq_soln(idx)%entropy
         call self%eq_solver%compute_transport_state(soln%eq_soln(idx))
     end subroutine
 

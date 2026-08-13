@@ -251,6 +251,7 @@ module cea_bindc
         type(c_ptr) :: insert = c_null_ptr
         logical(c_bool) :: smooth_truncation = .false.
         real(c_double)  :: truncation_width  = -1.0d0
+        logical(c_bool) :: frozen_rephase = .false.
     end type
 
     !-----------------------------------------------------------------
@@ -278,6 +279,7 @@ contains
         opts%ninsert = 0
         opts%insert = c_null_ptr
         opts%smooth_truncation = .false.
+        opts%frozen_rephase = .false.
         opts%truncation_width  = -1.0d0
     end function
 
@@ -1684,6 +1686,7 @@ contains
             solver%eq_solver%smooth_truncation = .true.
             if (opts%truncation_width > 0.0d0) solver%eq_solver%truncation_width = opts%truncation_width
         end if
+        solver%frozen_rephase = logical(opts%frozen_rephase)
         call log_info('BINDC: Created RocketSolver with options at '//to_str(sptr))
     end function
 

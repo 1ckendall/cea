@@ -2308,6 +2308,8 @@ cdef class RocketSolver:
             Enable smooth logistic truncation instead of hard cutoff for trace species
         truncation_width : float, default -1.0
             Gate width in log-space for smooth truncation; values <= 0 use the solver default (0.25)
+        frozen_rephase : bool, default False
+            Allow fixed condensed formula amounts to change physical phase during frozen expansion
     """
     cdef cea_rocket_solver ptr
     cdef Mixture products
@@ -2321,6 +2323,7 @@ cdef class RocketSolver:
         cdef double trace_val = kwargs.get('trace', -1.0)
         cdef bint smooth_truncation = kwargs.get('smooth_truncation', False)
         cdef double truncation_width_val = kwargs.get('truncation_width', -1.0)
+        cdef bint frozen_rephase = kwargs.get('frozen_rephase', False)
         cdef cea_string* cea_insert = NULL
         insert = kwargs.get('insert', [])
         cdef list _insert_keepalive = []
@@ -2353,6 +2356,7 @@ cdef class RocketSolver:
         opts.insert = cea_insert
         opts.smooth_truncation = smooth_truncation
         opts.truncation_width = truncation_width_val
+        opts.frozen_rephase = frozen_rephase
 
         if "reactants" in kwargs:
             reactants = kwargs["reactants"]

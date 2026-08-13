@@ -102,6 +102,7 @@ extern "C"
     const cea_string *insert;
     bool smooth_truncation;    // enable smooth logistic truncation instead of hard cutoff (default false)
     cea_real truncation_width; // gate width in log-space; <= 0 means use solver default (0.25)
+    bool frozen_rephase;       // allow fixed condensed formula amounts to change phase in frozen rocket flow
   } cea_solver_opts;
 
   // Initialize optional arguments

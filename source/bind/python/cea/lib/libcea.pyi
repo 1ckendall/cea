@@ -518,6 +518,7 @@ class RocketSolver:
         insert: Sequence[str] = (),
         smooth_truncation: bool = False,
         truncation_width: float = -1.0,
+        frozen_rephase: bool = False,
     ) -> None: ...
     @overload
     def __init__(
@@ -530,6 +531,7 @@ class RocketSolver:
         insert: Sequence[str] = (),
         smooth_truncation: bool = False,
         truncation_width: float = -1.0,
+        frozen_rephase: bool = False,
     ) -> None: ...
     @property
     def num_reactants(self) -> int: ...
