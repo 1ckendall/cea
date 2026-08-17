@@ -222,6 +222,17 @@ module cea_equilibrium
         integer :: times_converged       = 0
             !! Number of times the solution has converged without establishing a set of condensed species
 
+        ! Optional convergence history. Disabled by default so normal solves
+        ! retain their existing allocation and numerical path.
+        logical :: history_enabled = .false.
+        integer :: history_count = 0
+        integer, allocatable :: history_solver_iteration(:)
+        integer, allocatable :: history_flags(:)
+        real(dp), allocatable :: history_temperature(:)
+        real(dp), allocatable :: history_total_moles(:)
+        real(dp), allocatable :: history_residual(:)
+        real(dp), allocatable :: history_species_moles(:, :)
+
         ! Transport component basis cached after convergence.
         integer :: transport_basis_rows = 0
             !! Number of active basis rows used by transport reaction assembly
@@ -329,6 +340,8 @@ module cea_equilibrium
         procedure :: calc_pressure => EqSolution_calc_pressure
         procedure :: calc_volume => EqSolution_calc_volume
         procedure :: calc_entropy_sum => EqSolution_calc_entropy_sum
+        procedure :: set_history_enabled => EqSolution_set_history_enabled
+        procedure :: record_history => EqSolution_record_history
     end type
     interface EqSolution
         module procedure :: EqSolution_init
@@ -2322,10 +2335,90 @@ contains
 
     end subroutine
 
+    subroutine EqSolution_set_history_enabled(self, enabled)
+        class(EqSolution), intent(inout) :: self
+        logical, intent(in) :: enabled
+        integer, parameter :: initial_capacity = 64
+
+        self%history_enabled = enabled
+        self%history_count = 0
+        if (allocated(self%history_solver_iteration)) deallocate(self%history_solver_iteration)
+        if (allocated(self%history_flags)) deallocate(self%history_flags)
+        if (allocated(self%history_temperature)) deallocate(self%history_temperature)
+        if (allocated(self%history_total_moles)) deallocate(self%history_total_moles)
+        if (allocated(self%history_residual)) deallocate(self%history_residual)
+        if (allocated(self%history_species_moles)) deallocate(self%history_species_moles)
+        if (.not. enabled) then
+            return
+        end if
+        allocate(self%history_solver_iteration(initial_capacity), self%history_flags(initial_capacity))
+        allocate(self%history_temperature(initial_capacity), self%history_total_moles(initial_capacity))
+        allocate(self%history_residual(initial_capacity))
+        allocate(self%history_species_moles(size(self%nj), initial_capacity))
+    end subroutine
+
+    subroutine EqSolution_record_history(self, solver_iteration)
+        class(EqSolution), intent(inout) :: self
+        integer, intent(in) :: solver_iteration
+        integer :: capacity, index, ng, flags
+        integer, allocatable :: integer_buffer(:)
+        real(dp), allocatable :: real_buffer(:), species_buffer(:, :)
+
+        if (.not. self%history_enabled) return
+        capacity = size(self%history_temperature)
+        if (self%history_count == capacity) then
+            allocate(integer_buffer(2*capacity))
+            integer_buffer(:capacity) = self%history_solver_iteration
+            call move_alloc(integer_buffer, self%history_solver_iteration)
+            allocate(integer_buffer(2*capacity))
+            integer_buffer(:capacity) = self%history_flags
+            call move_alloc(integer_buffer, self%history_flags)
+            allocate(real_buffer(2*capacity))
+            real_buffer(:capacity) = self%history_temperature
+            call move_alloc(real_buffer, self%history_temperature)
+            allocate(real_buffer(2*capacity))
+            real_buffer(:capacity) = self%history_total_moles
+            call move_alloc(real_buffer, self%history_total_moles)
+            allocate(real_buffer(2*capacity))
+            real_buffer(:capacity) = self%history_residual
+            call move_alloc(real_buffer, self%history_residual)
+            allocate(species_buffer(size(self%nj), 2*capacity))
+            species_buffer(:, :capacity) = self%history_species_moles
+            call move_alloc(species_buffer, self%history_species_moles)
+        end if
+
+        self%history_count = self%history_count + 1
+        index = self%history_count
+        self%history_solver_iteration(index) = solver_iteration
+        self%history_temperature(index) = self%T
+        self%history_total_moles(index) = self%n
+        self%history_residual(index) = max(abs(self%dln_n), abs(self%dln_T))
+        if (size(self%dln_nj) > 0) self%history_residual(index) = &
+            max(self%history_residual(index), maxval(abs(self%dln_nj)))
+        if (size(self%dnj_c) > 0) self%history_residual(index) = &
+            max(self%history_residual(index), maxval(abs(self%dnj_c)))
+        ng = size(self%dln_nj)
+        if (ng > 0) self%history_species_moles(:ng, index) = exp(self%ln_nj(:ng))
+        if (ng < size(self%nj)) self%history_species_moles(ng+1:, index) = self%nj(ng+1:)
+        flags = 0
+        if (self%gas_converged) flags = ibset(flags, 0)
+        if (self%condensed_converged) flags = ibset(flags, 1)
+        if (self%moles_converged) flags = ibset(flags, 2)
+        if (self%element_converged) flags = ibset(flags, 3)
+        if (self%temperature_converged) flags = ibset(flags, 4)
+        if (self%entropy_converged) flags = ibset(flags, 5)
+        if (self%pi_converged) flags = ibset(flags, 6)
+        if (self%ions_converged) flags = ibset(flags, 7)
+        if (self%converged) flags = ibset(flags, 8)
+        self%history_flags(index) = flags
+    end subroutine
+
     subroutine EqSolution_reset_iteration_state(soln)
         ! Reset transient Newton-update state before each solve call.
         ! This allows EqSolution instances to be safely reused across solves.
         type(EqSolution), intent(inout) :: soln
+
+        soln%history_count = 0
 
         if (allocated(soln%dln_nj)) soln%dln_nj = 0.0d0
         if (allocated(soln%dnj_c)) soln%dnj_c = 0.0d0
@@ -2510,6 +2603,7 @@ contains
             if (ierr == 0) then
                 call self%update_solution(soln)
                 call self%check_convergence(soln)
+                call soln%record_history(iter)
 
                 ! Update pi_prev
                 soln%pi_prev = soln%pi

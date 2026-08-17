@@ -3028,6 +3028,66 @@ contains
         end if
     end function
 
+    function cea_eqsolution_set_history_enabled(slptr, enabled) result(ierr) bind(c)
+        integer(c_int) :: ierr
+        type(c_ptr), intent(in), value :: slptr
+        integer(c_int), intent(in), value :: enabled
+        type(EqSolution), pointer :: solution
+        ierr = CEA_SUCCESS
+        call c_f_pointer(slptr, solution)
+        call solution%set_history_enabled(enabled /= 0)
+    end function
+
+    function cea_eqsolution_get_history_size(slptr, history_size) result(ierr) bind(c)
+        integer(c_int) :: ierr
+        type(c_ptr), intent(in), value :: slptr
+        integer(c_int), intent(out) :: history_size
+        type(EqSolution), pointer :: solution
+        ierr = CEA_SUCCESS
+        call c_f_pointer(slptr, solution)
+        history_size = solution%history_count
+    end function
+
+    function cea_eqsolution_get_history_point(slptr, history_index, solver_iteration, temperature, total_moles, &
+                                               residual, flags) result(ierr) bind(c)
+        integer(c_int) :: ierr
+        type(c_ptr), intent(in), value :: slptr
+        integer(c_int), intent(in), value :: history_index
+        integer(c_int), intent(out) :: solver_iteration, flags
+        real(c_double), intent(out) :: temperature, total_moles, residual
+        type(EqSolution), pointer :: solution
+        integer :: i
+        ierr = CEA_SUCCESS
+        call c_f_pointer(slptr, solution)
+        i = history_index + 1
+        if (i < 1 .or. i > solution%history_count) then
+            ierr = CEA_INVALID_SIZE
+            return
+        end if
+        solver_iteration = solution%history_solver_iteration(i)
+        temperature = solution%history_temperature(i)
+        total_moles = solution%history_total_moles(i)
+        residual = solution%history_residual(i)
+        flags = solution%history_flags(i)
+    end function
+
+    function cea_eqsolution_get_history_species(slptr, history_index, num_species, species_moles) result(ierr) bind(c)
+        integer(c_int) :: ierr
+        type(c_ptr), intent(in), value :: slptr
+        integer(c_int), intent(in), value :: history_index, num_species
+        real(c_double), intent(out) :: species_moles(*)
+        type(EqSolution), pointer :: solution
+        integer :: i
+        ierr = CEA_SUCCESS
+        call c_f_pointer(slptr, solution)
+        i = history_index + 1
+        if (i < 1 .or. i > solution%history_count .or. num_species /= size(solution%nj)) then
+            ierr = CEA_INVALID_SIZE
+            return
+        end if
+        species_moles(:num_species) = solution%history_species_moles(:, i)
+    end function
+
     !-----------------------------------------------------------------
     ! Equilibrium Partials
     !-----------------------------------------------------------------

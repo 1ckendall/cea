@@ -352,6 +352,12 @@ cdef extern from "cea.h":
                                                      cea_real amounts[], const cea_bool mass)
     cpdef cea_err cea_eqsolution_get_moles(const cea_eqsolution solution, cea_real *value)
     cpdef cea_err cea_eqsolution_get_converged(const cea_eqsolution solution, bint *converged)
+    cpdef cea_err cea_eqsolution_set_history_enabled(const cea_eqsolution solution, cea_int enabled)
+    cpdef cea_err cea_eqsolution_get_history_size(const cea_eqsolution solution, cea_int *history_size)
+    cpdef cea_err cea_eqsolution_get_history_point(const cea_eqsolution solution, cea_int history_index,
+        cea_int *solver_iteration, cea_real *temperature, cea_real *total_moles, cea_real *residual, cea_int *flags)
+    cpdef cea_err cea_eqsolution_get_history_species(const cea_eqsolution solution, cea_int history_index,
+        cea_int num_species, cea_real species_moles[])
 
     # Equilibrium Partials
     cpdef cea_err cea_eqpartials_create(cea_eqpartials *partials, const cea_eqsolver solver)

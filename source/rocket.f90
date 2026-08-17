@@ -939,6 +939,11 @@ contains
                 ! Solve the equilibrium problem
                 soln%pressure(idx) = pc/exp(ln_pinf_pe)
                 call self%eq_solver%solve(soln%eq_soln(idx), "sp", s0, soln%pressure(idx), weights, partials=soln%eq_partials(idx))
+                if (.not. soln%eq_soln(idx)%converged) then
+                    call log_warning("RocketSolver: equilibrium solve failed at a subsonic exit station")
+                    call mark_partial_stop(soln, idx-1, rocket_warning_none)
+                    return
+                end if
 
                 ! Compute exit properties
                 h = dot_product(soln%eq_soln(idx)%nj, soln%eq_soln(idx)%thermo%enthalpy)*soln%eq_soln(idx)%T
@@ -1026,6 +1031,11 @@ contains
                 ! Solve the equilibrium problem
                 soln%pressure(idx) = pc/exp(ln_pinf_pe)
                 call self%eq_solver%solve(soln%eq_soln(idx), "sp", s0, soln%pressure(idx), weights, partials=soln%eq_partials(idx))
+                if (.not. soln%eq_soln(idx)%converged) then
+                    call log_warning("RocketSolver: equilibrium solve failed at a supersonic exit station")
+                    call mark_partial_stop(soln, idx-1, rocket_warning_none)
+                    return
+                end if
 
                 ! Compute exit properties
                 h = dot_product(soln%eq_soln(idx)%nj, soln%eq_soln(idx)%thermo%enthalpy)*soln%eq_soln(idx)%T

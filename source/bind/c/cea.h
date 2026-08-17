@@ -446,6 +446,29 @@ extern "C"
       const cea_eqsolution soln,
       int *converged);
 
+  cea_err cea_eqsolution_set_history_enabled(
+      const cea_eqsolution soln,
+      const int enabled);
+
+  cea_err cea_eqsolution_get_history_size(
+      const cea_eqsolution soln,
+      int *size);
+
+  cea_err cea_eqsolution_get_history_point(
+      const cea_eqsolution soln,
+      const int index,
+      int *solver_iteration,
+      cea_real *temperature,
+      cea_real *total_moles,
+      cea_real *residual,
+      int *flags);
+
+  cea_err cea_eqsolution_get_history_species(
+      const cea_eqsolution soln,
+      const int index,
+      const int num_species,
+      cea_real species_moles[]);
+
   //----------------------------------------------------------------------
   // Equilibrium Partials API
   //----------------------------------------------------------------------

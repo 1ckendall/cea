@@ -329,7 +329,10 @@ class EqSolution:
         solver: EqSolver,
         T_init: float | None = None,
         nj_init: VectorLike | None = None,
+        history: bool = False,
     ) -> None: ...
+    @property
+    def convergence_history(self) -> list[dict[str, Any]]: ...
     @property
     def T(self) -> float: ...
     @property
