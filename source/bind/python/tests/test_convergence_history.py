@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 import cea
 
@@ -25,3 +26,20 @@ def test_history_exposes_newton_state_and_species():
     assert history[-1]["flags"]["converged"]
     assert set(history[-1]["species_moles"]) == {"H", "H2", "H2O", "O", "O2", "OH"}
     assert history[-1]["residual"] >= 0.0
+
+
+@pytest.mark.parametrize("trace", [1.0e-6, 1.0e-10, 1.0e-14])
+def test_history_trace_sweep_is_finite_and_normalized(trace):
+    reactants = cea.Mixture(["CH4", "O2"])
+    products = cea.Mixture(["CH4", "O2"], products_from_reactants=True)
+    solver = cea.EqSolver(products, reactants=reactants, trace=trace, ions=False)
+    solution = cea.EqSolution(solver, history=True)
+    weights = reactants.moles_to_weights(np.array([1.0, 2.0]))
+
+    solver.solve(solution, cea.TP, 4500.0, 0.01, weights)
+
+    assert solution.converged
+    assert np.isfinite(solution.T)
+    assert np.all(np.isfinite(solution.nj))
+    assert sum(solution.mole_fractions.values()) == pytest.approx(1.0, abs=1.0e-10)
+    assert solution.convergence_history
