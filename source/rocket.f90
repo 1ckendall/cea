@@ -644,6 +644,11 @@ contains
 
             ! Solve the equilibrium problem using the previous solution as the initial guess
             call self%eq_solver%solve(soln%eq_soln(idx), "sp", s0, soln%pressure(idx), weights, partials=soln%eq_partials(idx))
+            if (.not. soln%eq_soln(idx)%converged) then
+                call log_warning("RocketSolver: equilibrium solve failed at the throat station")
+                call mark_partial_stop(soln, idx-1, rocket_warning_none)
+                return
+            end if
 
             ! Compute throat properties
             h = dot_product(soln%eq_soln(idx)%nj, soln%eq_soln(idx)%thermo%enthalpy)*soln%eq_soln(idx)%T
@@ -794,6 +799,11 @@ contains
             ! Solve the equilibrium problem
             call self%set_init_state(soln, idx)
             call self%eq_solver%solve(soln%eq_soln(idx), "sp", s0, soln%pressure(idx), weights, partials=soln%eq_partials(idx))
+            if (.not. soln%eq_soln(idx)%converged) then
+                call log_warning("RocketSolver: equilibrium solve failed at a pressure-ratio exit station")
+                call mark_partial_stop(soln, idx-1, rocket_warning_none)
+                return
+            end if
 
             ! Compute exit properties
             h = dot_product(soln%eq_soln(idx)%nj, soln%eq_soln(idx)%thermo%enthalpy)*soln%eq_soln(idx)%T
@@ -1251,6 +1261,13 @@ contains
             call log_debug("Starting chamber eqsolve")
             call self%eq_solver%solve(soln%eq_soln(1), prob_type, state1, pc, reactant_weights, &
                 partials=soln%eq_partials(1))
+            if (.not. soln%eq_soln(1)%converged) then
+                soln%converged = .false.
+                soln%status_code = rocket_status_failed
+                soln%num_pts = 0
+                call log_warning("RocketSolver: equilibrium solve failed at the chamber station")
+                return
+            end if
         end if
         soln%i_save = -1
 
