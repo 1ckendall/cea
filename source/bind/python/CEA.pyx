@@ -1538,7 +1538,8 @@ cdef class EqSolution:
     cdef cea_eqsolution ptr
     cdef EqSolver solver
     cdef public int last_error
-    def __cinit__(self, EqSolver solver, T_init: Optional[double] = None, nj_init: Optional[np.ndarray] = None):
+    def __cinit__(self, EqSolver solver, T_init: Optional[double] = None,
+                  nj_init: Optional[np.ndarray] = None, history: bool = False):
 
         cdef cea_err ierr
         cdef int nj_len
@@ -1547,6 +1548,10 @@ cdef class EqSolution:
         _check_ierr(ierr, "EqSolution.__cinit__")
         self.solver = solver
         self.last_error = <int>SUCCESS
+
+        if history:
+            ierr = cea_eqsolution_set_history_enabled(self.ptr, 1)
+            _check_ierr(ierr, "EqSolution.__cinit__: enable history")
 
         if T_init is not None:
             ierr = cea_eqsolution_set_T(self.ptr, <cea_real>T_init)
@@ -1571,6 +1576,48 @@ cdef class EqSolution:
         if self.ptr:
             cea_eqsolution_destroy(&self.ptr)
         return
+
+    property convergence_history:
+        """Newton iteration snapshots, or an empty list when collection was disabled."""
+        def __get__(self):
+            cdef cea_err ierr
+            cdef cea_int history_size, solver_iteration, flags
+            cdef cea_real temperature, total_moles, residual
+            cdef int np_ = self.solver.num_products
+            cdef np.ndarray[np.float64_t, ndim=1, mode="c"] amounts
+            cdef list names = self.solver.products.species_names
+            cdef list result = []
+            ierr = cea_eqsolution_get_history_size(self.ptr, &history_size)
+            _check_ierr(ierr, "EqSolution.convergence_history: get size")
+            for index in range(history_size):
+                ierr = cea_eqsolution_get_history_point(
+                    self.ptr, index, &solver_iteration, &temperature, &total_moles, &residual, &flags
+                )
+                _check_ierr(ierr, "EqSolution.convergence_history: get point")
+                amounts = np.empty(np_, dtype=np.float64)
+                ierr = cea_eqsolution_get_history_species(self.ptr, index, np_, <cea_array>amounts.data)
+                _check_ierr(ierr, "EqSolution.convergence_history: get species")
+                result.append({
+                    "iteration": int(index + 1),
+                    "solver_iteration": int(solver_iteration),
+                    "temperature": float(temperature),
+                    "total_moles": float(total_moles),
+                    "residual": float(residual),
+                    "flags": {
+                        "gas": bool(flags & (1 << 0)),
+                        "condensed": bool(flags & (1 << 1)),
+                        "moles": bool(flags & (1 << 2)),
+                        "elements": bool(flags & (1 << 3)),
+                        "temperature": bool(flags & (1 << 4)),
+                        "entropy": bool(flags & (1 << 5)),
+                        "multipliers": bool(flags & (1 << 6)),
+                        "ions": bool(flags & (1 << 7)),
+                        "converged": bool(flags & (1 << 8)),
+                    },
+                    "species_moles": dict(zip(names, amounts.tolist())),
+                    "event": "iteration",
+                })
+            return result
 
     property T:
         """
