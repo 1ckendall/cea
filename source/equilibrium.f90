@@ -5386,6 +5386,8 @@ contains
         real(dp), allocatable :: alpha(:, :)  ! Stoichiometrix matrix for the chemical reactions
         real(dp), allocatable :: stcf(:, :)   ! Stores some coefficients
         real(dp), allocatable :: stcoef(:)    ! Stores some coefficients
+        real(dp), allocatable :: nj_original(:)
+        real(dp) :: cp_fr_original
         logical :: change                     ! Flag to switch value in stoichiometric matrix
         real(dp) :: coeff                     ! Temporary coefficient value
         integer, allocatable :: tmp(:)        ! Temporrary indexing array
@@ -5404,6 +5406,8 @@ contains
 
         frozen_transport_only = .false.
         if (present(frozen_shock)) frozen_transport_only = frozen_shock
+        nj_original = eq_soln%nj
+        cp_fr_original = eq_soln%cp_fr
 
         ! Define shorthand
         np = eq_solver%transport_db%num_pure
@@ -5540,7 +5544,11 @@ contains
             end if
         end do
 
-        if (nm <= 0 .or. total <= 0.0d0) return
+        if (nm <= 0 .or. total <= 0.0d0) then
+            eq_soln%nj = nj_original
+            eq_soln%cp_fr = cp_fr_original
+            return
+        end if
 
         ! Align electron concentration with the finalized transport species set.
         do i = 1, nm
@@ -5982,6 +5990,8 @@ contains
             eq_soln%cp_eq_transport = 0.0d0
             eq_soln%conductivity_eq = 0.0d0
             eq_soln%pr_eq = 0.0d0
+            eq_soln%nj = nj_original
+            eq_soln%cp_fr = cp_fr_original
             return
         end if
         cpreac = cpreac/wtmol
@@ -5989,6 +5999,8 @@ contains
         eq_soln%cp_eq_transport = cp_eq
         eq_soln%conductivity_eq = eq_soln%conductivity_fr + (reacon*1.d-3)
         eq_soln%pr_eq = eq_soln%viscosity*cp_eq/eq_soln%conductivity_eq
+        eq_soln%nj = nj_original
+        eq_soln%cp_fr = cp_fr_original
 
     end subroutine
 
