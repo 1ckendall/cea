@@ -62,13 +62,13 @@ module cea_shock
             !! incident-state frozen Cp basis at the reflected temperature.
 
         ! Solution variables
-        real(dp) :: rho12, rho52 = 0.0d0
+        real(dp) :: rho12 = 0.0d0, rho52 = 0.0d0
             !! Ratios of density across the incident and reflected shocks
-        real(dp) :: p21, p52 = 0.0d0
+        real(dp) :: p21 = 0.0d0, p52 = 0.0d0
             !! Pressure ratios across the incident and reflected shocks
-        real(dp) :: t21, t52 = 0.0d0
+        real(dp) :: t21 = 0.0d0, t52 = 0.0d0
             !! Temperature ratios across the incident and reflected shocks
-        real(dp) :: M21, M52 = 0.0d0
+        real(dp) :: M21 = 0.0d0, M52 = 0.0d0
             !! Molecular-weight ratios M2/M1 and M5/M2 (legacy CEA2 output), not Mach ratios.
         real(dp) :: v2 = 0.0d0
             !! Station-2 gas speed in the wall/unshocked-gas frame: u(1)-u(2) [m/s].
