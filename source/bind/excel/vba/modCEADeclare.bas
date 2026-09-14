@@ -2,6 +2,7 @@ Attribute VB_Name = "modCEADeclare"
 Option Explicit
 
 #If Win64 Then
+    ' Thread safety: see "Thread safety" in ../README.md.
     Private Const CEA_EXCEL_DLL_NAME As String = "cea_excel.dll"
     Private Const LOAD_WITH_ALTERED_SEARCH_PATH As Long = &H8
 

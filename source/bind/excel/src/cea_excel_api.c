@@ -1,3 +1,4 @@
+/* Thread safety: see "Thread safety" in ../README.md. */
 #include "cea_excel.h"
 
 #include "cea.h"

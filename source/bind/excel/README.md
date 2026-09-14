@@ -25,6 +25,15 @@ Platform support
 - Not supported: macOS Excel/VBA, 32-bit Office, XLL, or Office.js.
 - Do not attempt to use the workbook interface outside 64-bit Windows Excel.
 
+Thread safety
+-------------
+Excel always calls VBA user-defined functions, including these worksheet
+UDFs, serially on its single main thread; the multithreaded recalculation
+engine never dispatches them to worker threads. So `cea_excel.dll` is never
+entered concurrently and needs no internal locking today. See
+[Multithreaded recalculation in Excel](https://learn.microsoft.com/en-us/office/client-developer/excel/multithreaded-recalculation-in-excel),
+under "What is and is not considered thread safe by Excel".
+
 Installation overview
 ---------------------
 1. Build the native `cea_excel.dll` on 64-bit Windows.
