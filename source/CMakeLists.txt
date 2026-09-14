@@ -40,6 +40,7 @@ if(CEA_BUILD_TESTING AND PFUNIT_FOUND)
             mixture_test.pf
             equilibrium_test.pf
             rocket_test.pf
+            rocket_rephase_test.pf
             shock_test.pf
             detonation_test.pf
         LINK_LIBRARIES cea::core fbasics::core

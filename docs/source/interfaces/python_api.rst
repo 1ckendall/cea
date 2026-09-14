@@ -45,6 +45,20 @@ an invalid shape or length raises ``ValueError`` before the native solver runs.
 .. autoclass:: cea.RocketSolver
    :members:
 
+``RocketSolver(..., frozen_rephase=True)`` permits a populated condensed species
+to hand its fixed amount to a temperature-valid phase with the same elemental
+stoichiometry during frozen expansion. Gas amounts and the total amount of each
+condensed formula remain frozen. The replacement phase receives constant
+enthalpy and entropy reference corrections at the handoff boundary so the
+station solution remains continuous. This model excludes latent heat and full
+two-phase equilibrium. Handoffs follow a fixed sequence of shared fit boundaries
+from the freeze state, independent of temperature guesses. The current phase is
+retained while its fit remains valid; at its boundary, the valid continuing phase
+with the lowest database Gibbs energy is selected (exact ties use species names).
+Missing intermediate phases are not skipped: the terminal phase retains the
+50 K guard band, after which the solver returns a partial result. The option
+defaults to ``False`` so existing frozen calculations are unchanged.
+
 RocketSolution
 --------------
 

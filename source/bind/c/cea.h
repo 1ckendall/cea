@@ -531,6 +531,12 @@ extern "C"
       const cea_mixture products,
       const cea_solver_opts options);
 
+  // Enable reference-corrected condensed-phase handoff for subsequent frozen solves.
+  // Defaults to false. Returns CEA_INVALID_INDEX for a null solver.
+  cea_err cea_rocket_solver_set_frozen_rephase(
+      const cea_rocket_solver solver,
+      bool enabled);
+
   cea_err cea_rocket_solver_destroy(
       cea_rocket_solver *solver);
 

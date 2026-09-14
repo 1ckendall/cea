@@ -45,6 +45,16 @@ endif()
 
 if (CEA_BUILD_TESTING)
 
+    foreach(test_name IN ITEMS frozen_rephase legacy_solver_opts)
+        add_executable(cea_bindc_${test_name} tests/${test_name}.c)
+        target_link_libraries(cea_bindc_${test_name} PRIVATE cea::bindc)
+        add_test(
+            NAME cea_bindc_${test_name}
+            COMMAND cea_bindc_${test_name}
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        )
+    endforeach()
+
     add_executable(cea_bindc_reactant_temperature_range tests/reactant_temperature_range.c)
     target_link_libraries(cea_bindc_reactant_temperature_range PRIVATE cea::bindc)
     add_test(

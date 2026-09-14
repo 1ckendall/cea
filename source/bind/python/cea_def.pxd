@@ -381,6 +381,8 @@ cdef extern from "cea.h":
                                                           const cea_mixture reactants)
     cpdef cea_err cea_rocket_solver_create_with_options(cea_rocket_solver *solver, const cea_mixture products,
                                                         const cea_solver_opts opts)
+    cpdef cea_err cea_rocket_solver_set_frozen_rephase(cea_rocket_solver solver, cea_bool enabled)
+
     cpdef cea_err cea_rocket_solver_destroy(cea_rocket_solver *solver)
     # pi_p is optional when n_pi_p == 0.
     cpdef cea_err cea_rocket_solver_solve_iac(const cea_rocket_solver solver, cea_rocket_solution soln,

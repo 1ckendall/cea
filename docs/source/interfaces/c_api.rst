@@ -14,6 +14,11 @@ Notes:
 - ``cea_shock_solver_solve`` may return ``CEA_LAST_VALID_SOLUTION`` when the incident-equilibrium solver retains
   a last valid state for inspection without converging the shock iteration. In that case the returned properties
   remain readable, but ``cea_shock_solution_get_converged`` still reports false.
+- ``cea_rocket_solver_set_frozen_rephase(solver, true)`` enables reference-corrected condensed-phase
+  handoff for subsequent frozen rocket solves. It defaults to disabled and can be disabled again with
+  ``false``. The existing ``cea_solver_opts`` structure and constructor ABI are unchanged.
+  Phase paths follow connected thermodynamic fits; missing intermediate phases retain the 50 K
+  terminal guard band and partial-stop behavior. This model excludes latent heat and two-phase equilibrium.
 
 .. doxygenfile:: cea.h
    :project: cea

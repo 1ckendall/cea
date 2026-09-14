@@ -533,6 +533,60 @@ contains
         @assertRelativelyEqual(38.038d0, soln%pressure(2), tol)
         @assertRelativelyEqual(1.0d0, soln%mach(2), tol)
         @assertRelativelyEqual(1466.5d0, soln%c_star(2), tol)
+
+        ! C(gr) is active (nj ~ 3.4e-3) at the frozen point, and points 1-2
+        ! above complete before point 3 fails -- so the frozen thermo-interval
+        ! check exercises its success path (in_range = .true.) for an active
+        ! condensed species here, not just the failure path above.
+        @assertTrue(soln%eq_soln(1)%is_active(1))
+    end subroutine
+
+    @test
+    subroutine test_rocket_frozen_condensed_rephase()
+        type(Mixture) :: products
+        type(Mixture) :: reactants
+        type(RocketSolver) :: solver
+        type(RocketSolution) :: soln
+        character(:), allocatable :: product_names(:)
+        integer :: i, j, liquid_idx, solid_idx
+        real(dp) :: formula_amount, hc, weights(2)
+        real(dp), parameter :: tol = 1.0d-10
+
+        reactants = Mixture(all_thermo, ['AL(cr)', 'O2(L) '])
+        product_names = reactants%get_products(all_thermo)
+        products = Mixture(all_thermo, product_names)
+
+        weights = reactants%weights_from_of([0.0d0, 1.0d0], [1.0d0, 0.0d0], 0.8896d0)
+        hc = reactants%calc_enthalpy(weights, [298.15d0, 90.17d0])/R
+        liquid_idx = findloc(products%species_names, 'AL2O3(L)', dim=1)
+        solid_idx = findloc(products%species_names, 'AL2O3(a)', dim=1)
+
+        solver = RocketSolver(products, reactants, frozen_rephase=.true.)
+        soln = solver%solve(weights, 68.9476d0, supar=[10.0d0, 100.0d0, 1000.0d0], &
+                           hc=hc, fac=.false., n_frz=1)
+
+        @assertTrue(soln%converged)
+        @assertEqual(5, soln%num_pts)
+        @assertTrue(liquid_idx > 0)
+        @assertTrue(solid_idx > 0)
+        @assertTrue(soln%eq_soln(1)%nj(liquid_idx) > 0.0d0)
+        @assertEqual(0.0d0, soln%eq_soln(1)%nj(solid_idx), tol)
+        @assertEqual(0.0d0, soln%eq_soln(soln%num_pts)%nj(liquid_idx), tol)
+        @assertTrue(soln%eq_soln(soln%num_pts)%nj(solid_idx) > 0.0d0)
+        @assertFalse(soln%eq_soln(soln%num_pts)%is_active(liquid_idx-products%num_gas))
+        @assertEqual(0, soln%eq_soln(soln%num_pts)%active_rank(liquid_idx-products%num_gas))
+        @assertTrue(soln%eq_soln(soln%num_pts)%is_active(solid_idx-products%num_gas))
+        @assertTrue(soln%eq_soln(soln%num_pts)%active_rank(solid_idx-products%num_gas) > 0)
+
+        formula_amount = soln%eq_soln(1)%nj(liquid_idx) + soln%eq_soln(1)%nj(solid_idx)
+        do i = 2, soln%num_pts
+            @assertEqual(formula_amount, &
+                         soln%eq_soln(i)%nj(liquid_idx) + soln%eq_soln(i)%nj(solid_idx), tol)
+            do j = 1, products%num_gas
+                @assertEqual(soln%eq_soln(1)%nj(j), soln%eq_soln(i)%nj(j), tol)
+            end do
+            @assertEqual(soln%eq_soln(1)%entropy, soln%eq_soln(i)%entropy, tol)
+        end do
     end subroutine
 
     @test

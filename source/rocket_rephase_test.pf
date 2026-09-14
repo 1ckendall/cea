@@ -1,0 +1,317 @@
+module rocket_rephase_test
+    use funit
+    use cea_rocket
+    use cea_thermo
+    use cea_fits, only: ThermoFit
+    implicit none
+    type(ThermoDB) :: database
+contains
+    @before
+    subroutine setup()
+        database = read_thermo('data/thermo.lib')
+    end subroutine
+
+    subroutine silica_case(solver, soln)
+        type(RocketSolver), intent(out) :: solver
+        type(RocketSolution), intent(out) :: soln
+        type(Mixture) :: reactants, products
+        reactants = Mixture(database, ['N2     ', 'SiO2(L)'])
+        products = Mixture(database, ['N2         ', 'SiO2(a-qz) ', 'SiO2(b-qz) ', 'SiO2(b-crt)', 'SiO2(L)    '])
+        solver = RocketSolver(products, reactants, frozen_rephase=.true.)
+        soln = solver%solve([0.5d0, 0.5d0], 10.0d0, tc=2200.0d0, n_frz=-1, pi_p=[50.0d0], fac=.false.)
+    end subroutine
+
+    subroutine integrate_cp(species, low, high, h, s)
+        ! Independent Simpson integration of Cp/R and Cp/(RT), with no H/S reference corrections.
+        type(SpeciesThermo), intent(in) :: species
+        real(dp), intent(in) :: low, high
+        real(dp), intent(out) :: h, s
+        integer, parameter :: panels = 800
+        integer :: i
+        real(dp) :: T, step, factor, cp
+        step = (high-low)/panels
+        h = 0.0d0
+        s = 0.0d0
+        do i = 0, panels
+            T = low+i*step
+            factor = 2.0d0
+            if (mod(i, 2) == 1) factor = 4.0d0
+            if (i == 0 .or. i == panels) factor = 1.0d0
+            cp = species%calc_cp(T)
+            h = h+factor*cp
+            s = s+factor*cp/T
+        end do
+        h = h*step/3.0d0
+        s = s*step/3.0d0
+    end subroutine
+
+    subroutine silica_reference(solver, frozen, T, delta_h, delta_s)
+        type(RocketSolver), intent(in) :: solver
+        type(EqSolution), intent(in) :: frozen
+        real(dp), intent(in) :: T
+        real(dp), intent(out) :: delta_h, delta_s
+        character(11), parameter :: names(4) = ['SiO2(a-qz) ', 'SiO2(b-qz) ', 'SiO2(b-crt)', 'SiO2(L)    ']
+        real(dp), parameter :: bounds(5) = [300.0d0, 848.0d0, 1200.0d0, 1996.0d0, 6000.0d0]
+        real(dp) :: a, b, h, s, amount, sign_t
+        integer :: i, j
+        delta_h = 0.0d0
+        delta_s = 0.0d0
+        sign_t = sign(1.0d0, T-frozen%T)
+        a = min(T, frozen%T)
+        b = max(T, frozen%T)
+        ! Split the gas integral at its fit boundary as well.
+        if (a < 1000.0d0 .and. b > 1000.0d0) then
+            call integrate_cp(solver%eq_solver%products%species(1), a, 1000.0d0, h, s)
+            delta_h = h*frozen%nj(1)
+            delta_s = s*frozen%nj(1)
+            a = 1000.0d0
+        end if
+        call integrate_cp(solver%eq_solver%products%species(1), a, b, h, s)
+        delta_h = delta_h+h*frozen%nj(1)
+        delta_s = delta_s+s*frozen%nj(1)
+        amount = sum(frozen%nj(2:))
+        do i = 1, 4
+            a = max(min(T, frozen%T), bounds(i))
+            b = min(max(T, frozen%T), bounds(i+1))
+            if (b <= a) cycle
+            j = findloc(solver%eq_solver%products%species_names, names(i), dim=1)
+            call integrate_cp(solver%eq_solver%products%species(j), a, b, h, s)
+            delta_h = delta_h+h*amount
+            delta_s = delta_s+s*amount
+        end do
+        delta_h = sign_t*delta_h
+        delta_s = sign_t*delta_s
+    end subroutine
+
+    subroutine assert_station(solver, frozen, station, pressure)
+        type(RocketSolver), intent(in) :: solver
+        type(EqSolution), intent(in) :: frozen, station
+        real(dp), intent(in) :: pressure
+        real(dp) :: h, s, reconstructed_s
+        integer :: j, k, nactive
+        call silica_reference(solver, frozen, station%T, h, s)
+        @assertEqual(frozen%enthalpy+h*R/1.0d3, station%enthalpy, 2.0d-5)
+        @assertEqual(0.0d0, s-frozen%n*log(pressure/frozen%pressure), 1.0d-8)
+        reconstructed_s = dot_product(station%nj, station%thermo%entropy)
+        reconstructed_s = reconstructed_s+station%nj(1)*station%dln_nj(1)
+        @assertEqual(frozen%entropy, reconstructed_s*R/1.0d3, 1.0d-7)
+        @assertEqual(frozen%nj(1), station%nj(1))
+        @assertEqual(sum(frozen%nj(2:)), sum(station%nj(2:)), 1.0d-15)
+        @assertEqual(matmul(frozen%nj, solver%eq_solver%products%stoich_matrix), &
+                     matmul(station%nj, solver%eq_solver%products%stoich_matrix), 1.0d-14)
+        @assertEqual(1.0d0, sum(station%mole_fractions), 1.0d-14)
+        @assertEqual(1.0d0, sum(station%mass_fractions), 1.0d-14)
+        nactive = count(station%is_active)
+        do k = 1, nactive
+            @assertEqual(1, count(station%active_rank == k))
+        end do
+        do j = 1, size(station%is_active)
+            if (station%is_active(j)) then
+                @assertTrue(station%active_rank(j) > 0)
+            else
+                @assertEqual(0, station%active_rank(j))
+            end if
+        end do
+    end subroutine
+
+    @test
+    subroutine test_rephase_guesses_and_pressure_ratios()
+        type(RocketSolver) :: solver
+        type(RocketSolution) :: base, trial
+        real(dp), parameter :: guesses(5) = [2200.0d0, 1800.0d0, 1000.0d0, 100.0d0, 1.0d5]
+        real(dp), parameter :: ratios(3) = [2.0d0, 50.0d0, 6000.0d0]
+        real(dp) :: expected_T, expected_h
+        integer :: i, j
+        call silica_case(solver, base)
+        @assertTrue(base%converged)
+        do i = 1, size(ratios)
+            do j = 1, size(guesses)
+                trial = base
+                trial%pressure(3) = 10.0d0/ratios(i)
+                trial%eq_soln(3) = EqSolution(solver%eq_solver, T_init=guesses(j))
+                call solver%frozen(trial, 3, 1)
+                @assertTrue(trial%converged)
+                if (j == 1) then
+                    expected_T = trial%eq_soln(3)%T
+                    expected_h = trial%eq_soln(3)%enthalpy
+                end if
+                @assertEqual(expected_T, trial%eq_soln(3)%T, 2.0d-5)
+                @assertEqual(expected_h, trial%eq_soln(3)%enthalpy, 2.0d-5)
+                call assert_station(solver, base%eq_soln(1), trial%eq_soln(3), trial%pressure(3))
+            end do
+        end do
+    end subroutine
+
+    @test
+    subroutine test_rephase_boundary_continuity_and_heating()
+        type(RocketSolver) :: solver
+        type(RocketSolution) :: base, trial
+        real(dp), parameter :: targets(9) = [847.999d0, 848.001d0, 1199.999d0, 1200.001d0, &
+                                             1995.999d0, 1996.001d0, 2100.0d0, 2200.0d0, 2400.0d0]
+        real(dp) :: h, s
+        integer :: i
+        call silica_case(solver, base)
+        do i = 1, size(targets)
+            call silica_reference(solver, base%eq_soln(1), targets(i), h, s)
+            trial = base
+            trial%pressure(3) = 10.0d0*exp(s/base%eq_soln(1)%n)
+            trial%eq_soln(3) = EqSolution(solver%eq_solver, T_init=1000.0d0)
+            call solver%frozen(trial, 3, 1)
+            @assertTrue(trial%converged)
+            @assertEqual(targets(i), trial%eq_soln(3)%T, 1.0d-4)
+            call assert_station(solver, base%eq_soln(1), trial%eq_soln(3), trial%pressure(3))
+        end do
+    end subroutine
+
+    subroutine constant_cp_case(solver, soln, origin)
+        type(RocketSolver), intent(out) :: solver
+        type(RocketSolution), intent(out) :: soln
+        character(*), intent(in) :: origin
+        type(Mixture) :: products, reactants
+        integer :: j
+        products = Mixture(database, ['N2         ', 'SiO2(a-qz) ', 'SiO2(b-qz) ', 'SiO2(b-crt)', 'SiO2(L)    '])
+        ! Equal Cp with deliberately different H/S references gives an analytic isentrope.
+        do j = 1, products%num_species
+            products%species(j)%fits = ThermoFit(0.0d0, 0.0d0, 4.0d0, 0.0d0, 0.0d0, &
+                                                 0.0d0, 0.0d0, 100.0d0*j, 0.25d0*j)
+        end do
+        reactants = Mixture(database, [character(11) :: 'N2', origin])
+        solver = RocketSolver(products, reactants, frozen_rephase=.true.)
+        soln = solver%solve([0.5d0, 0.5d0], 10.0d0, tc=2200.0d0, n_frz=-1, pi_p=[2.0d0], fac=.false.)
+    end subroutine
+
+    subroutine constant_cp_station(solver, soln, T, guess)
+        type(RocketSolver), intent(in) :: solver
+        type(RocketSolution), intent(inout) :: soln
+        real(dp), intent(in) :: T, guess
+        real(dp) :: cp
+        cp = 4.0d0*sum(soln%eq_soln(1)%nj)
+        soln%pressure(3) = 10.0d0*(T/soln%eq_soln(1)%T)**(cp/soln%eq_soln(1)%n)
+        soln%eq_soln(3) = EqSolution(solver%eq_solver, T_init=guess)
+        soln%converged = .true.
+        soln%last_completed_idx = 2
+        call solver%frozen(soln, 3, 1)
+    end subroutine
+
+    @test
+    subroutine test_rephase_gap_and_guard_band()
+        type(RocketSolver) :: solver
+        type(RocketSolution) :: soln
+        integer :: j
+        call constant_cp_case(solver, soln, 'SiO2(L)')
+        ! Leave an internal gap, even though a low-temperature partner is available.
+        j = findloc(solver%eq_solver%products%species_names, 'SiO2(b-qz)', dim=1)
+        solver%eq_solver%products%species(j)%T_fit(1, :) = [848.0d0, 1100.0d0]
+        call constant_cp_station(solver, soln, 1151.0d0, 100.0d0)
+        @assertTrue(soln%converged)
+        @assertEqual(1151.0d0, soln%eq_soln(3)%T, 2.0d-5)
+        j = findloc(solver%eq_solver%products%species_names, 'SiO2(b-crt)', dim=1)
+        @assertTrue(soln%eq_soln(3)%nj(j) > 0.0d0)
+        call constant_cp_station(solver, soln, 1149.0d0, 2200.0d0)
+        @assertFalse(soln%converged)
+        @assertEqual(rocket_status_partial, soln%status_code)
+        @assertEqual(2, soln%last_completed_idx)
+        call constant_cp_station(solver, soln, 800.0d0, 800.0d0)
+        @assertFalse(soln%converged)
+    end subroutine
+
+    @test
+    subroutine test_rephase_disconnected_intervals_use_path_fit()
+        type(RocketSolver) :: solver
+        type(RocketSolution) :: soln
+        type(ThermoFit) :: valid_fit
+        integer :: crystal, beta, liquid
+        call constant_cp_case(solver, soln, 'SiO2(L)')
+        crystal = findloc(solver%eq_solver%products%species_names, 'SiO2(b-crt)', dim=1)
+        beta = findloc(solver%eq_solver%products%species_names, 'SiO2(b-qz)', dim=1)
+        liquid = findloc(solver%eq_solver%products%species_names, 'SiO2(L)', dim=1)
+        valid_fit = solver%eq_solver%products%species(crystal)%fits(1)
+        solver%eq_solver%products%species(crystal)%num_intervals = 2
+        solver%eq_solver%products%species(crystal)%T_fit = reshape([1200.0d0, 1600.0d0, &
+                                                                                1400.0d0, 1996.0d0], [2, 2])
+        solver%eq_solver%products%species(crystal)%fits = [valid_fit, valid_fit]
+        solver%eq_solver%products%species(crystal)%fits(1)%a3 = 8.0d0
+        ! Cooling below the upper interval must extrapolate that interval, not the disconnected lower one.
+        call constant_cp_station(solver, soln, 1551.0d0, 2200.0d0)
+        @assertTrue(soln%converged)
+        @assertEqual(1551.0d0, soln%eq_soln(3)%T, 2.0d-5)
+        @assertEqual(4.0d0, soln%eq_soln(3)%thermo%cp(crystal), 1.0d-14)
+        call constant_cp_station(solver, soln, 1549.0d0, 2200.0d0)
+        @assertFalse(soln%converged)
+        ! A different phase can bridge the gap on a heating path. At exactly 1600 K
+        ! the handoff correction must use the upper crystal fit, whose lower endpoint is 1600 K.
+        solver%eq_solver%products%species(beta)%T_fit(1, 2) = 1600.0d0
+        soln%eq_soln(1)%nj(2) = soln%eq_soln(1)%nj(liquid)
+        soln%eq_soln(1)%nj(liquid) = 0.0d0
+        call soln%eq_soln(1)%replace_active_condensed(liquid-1, 1)
+        soln%eq_soln(1)%T = 800.0d0
+        call solver%eq_solver%products%calc_thermo(soln%eq_soln(1)%thermo, 800.0d0)
+        call solver%eq_solver%post_process(soln%eq_soln(1))
+        call constant_cp_station(solver, soln, 1900.0d0, 2200.0d0)
+        @assertTrue(soln%converged)
+        @assertEqual(1900.0d0, soln%eq_soln(3)%T, 2.0d-5)
+        @assertTrue(soln%eq_soln(3)%nj(crystal) > 0.0d0)
+    end subroutine
+
+    @test
+    subroutine test_rephase_overlap_selection_and_merging()
+        type(RocketSolver) :: solver
+        type(RocketSolution) :: soln
+        integer :: liquid, beta, crystal, alpha
+        real(dp) :: amount, cp, expected_h
+        call constant_cp_case(solver, soln, 'SiO2(L)')
+        liquid = findloc(solver%eq_solver%products%species_names, 'SiO2(L)', dim=1)
+        beta = findloc(solver%eq_solver%products%species_names, 'SiO2(b-qz)', dim=1)
+        crystal = findloc(solver%eq_solver%products%species_names, 'SiO2(b-crt)', dim=1)
+        alpha = findloc(solver%eq_solver%products%species_names, 'SiO2(a-qz)', dim=1)
+        solver%eq_solver%products%species(beta)%T_fit(1, :) = [848.0d0, 2500.0d0]
+        solver%eq_solver%products%species(crystal)%T_fit(1, :) = [1200.0d0, 2500.0d0]
+        solver%eq_solver%products%species(beta)%fits = solver%eq_solver%products%species(crystal)%fits
+        ! Exact Gibbs tie: b-crt precedes b-qz by name, independent of product ordering.
+        call constant_cp_station(solver, soln, 1500.0d0, 100.0d0)
+        @assertTrue(soln%converged)
+        @assertTrue(soln%eq_soln(3)%nj(crystal) > 0.0d0)
+        @assertEqual(0.0d0, soln%eq_soln(3)%nj(beta))
+        ! Lower Gibbs wins even when its name sorts later.
+        solver%eq_solver%products%species(beta)%fits%b1 = -10000.0d0
+        call constant_cp_station(solver, soln, 1500.0d0, 2200.0d0)
+        @assertTrue(soln%converged)
+        @assertTrue(soln%eq_soln(3)%nj(beta) > 0.0d0)
+        ! Split the freeze inventory between two overlapping, valid phases.
+        amount = soln%eq_soln(1)%nj(liquid)
+        soln%eq_soln(1)%nj(liquid) = 0.5d0*amount
+        soln%eq_soln(1)%nj(beta) = 0.5d0*amount
+        call soln%eq_soln(1)%activate_condensed(beta-1)
+        call solver%eq_solver%products%calc_thermo(soln%eq_soln(1)%thermo, 2200.0d0)
+        call solver%eq_solver%post_process(soln%eq_soln(1))
+        cp = 4.0d0*sum(soln%eq_soln(1)%nj)
+        expected_h = soln%eq_soln(1)%enthalpy+cp*(800.0d0-2200.0d0)*R/1.0d3
+        call constant_cp_station(solver, soln, 800.0d0, 2200.0d0)
+        @assertTrue(soln%converged)
+        @assertEqual(800.0d0, soln%eq_soln(3)%T, 2.0d-5)
+        @assertEqual(expected_h, soln%eq_soln(3)%enthalpy, 2.0d-5)
+        @assertEqual(amount, soln%eq_soln(3)%nj(alpha), 1.0d-15)
+        @assertEqual(1, count(soln%eq_soln(3)%is_active))
+        @assertEqual(1, soln%eq_soln(3)%active_rank(alpha-1))
+    end subroutine
+
+    @test
+    subroutine test_rephase_heating_through_successive_phases()
+        type(RocketSolver) :: solver
+        type(RocketSolution) :: soln
+        integer :: liquid
+        call constant_cp_case(solver, soln, 'SiO2(L)')
+        ! Use a valid solid freeze state, retaining the same analytic Cp reference.
+        liquid = findloc(solver%eq_solver%products%species_names, 'SiO2(L)', dim=1)
+        soln%eq_soln(1)%nj(2) = soln%eq_soln(1)%nj(liquid)
+        soln%eq_soln(1)%nj(liquid) = 0.0d0
+        call soln%eq_soln(1)%replace_active_condensed(liquid-1, 1)
+        soln%eq_soln(1)%T = 800.0d0
+        call solver%eq_solver%products%calc_thermo(soln%eq_soln(1)%thermo, 800.0d0)
+        call solver%eq_solver%post_process(soln%eq_soln(1))
+        call constant_cp_station(solver, soln, 2400.0d0, 100.0d0)
+        @assertTrue(soln%converged)
+        @assertEqual(2400.0d0, soln%eq_soln(3)%T, 3.0d-5)
+        @assertTrue(soln%eq_soln(3)%nj(liquid) > 0.0d0)
+    end subroutine
+end module

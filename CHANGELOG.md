@@ -14,6 +14,12 @@ All notable user-visible changes to this project are documented here.
   supported, with no numerical changes for valid inputs.
 
 ### Added
+- Added an opt-in `frozen_rephase` rocket-solver setting that preserves frozen
+  gas amounts and condensed formula inventory while handing condensed material
+  to a temperature-valid phase through connected fit boundaries, with deterministic
+  enthalpy/entropy reference corrections (excluding latent heat). Existing frozen
+  behavior remains the default. The C API exposes this through
+  `cea_rocket_solver_set_frozen_rephase` without changing the options-structure ABI.
 
 ## [3.3.4] - 2026-08-28
 

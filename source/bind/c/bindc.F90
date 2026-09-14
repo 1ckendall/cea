@@ -1659,6 +1659,19 @@ contains
         call log_info('BINDC: Created RocketSolver with options at '//to_str(sptr))
     end function
 
+    function cea_rocket_solver_set_frozen_rephase(sptr, enabled) result(ierr) bind(c)
+        integer(c_int) :: ierr
+        type(c_ptr), intent(in), value :: sptr
+        logical(c_bool), intent(in), value :: enabled
+        type(RocketSolver), pointer :: solver
+
+        ierr = CEA_INVALID_INDEX
+        if (.not. c_associated(sptr)) return
+        call c_f_pointer(sptr, solver)
+        solver%frozen_rephase = logical(enabled)
+        ierr = CEA_SUCCESS
+    end function
+
     function cea_rocket_solver_destroy(sptr) result(ierr) bind(c)
         integer(c_int) :: ierr
         type(c_ptr), intent(inout) :: sptr
